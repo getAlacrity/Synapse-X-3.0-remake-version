@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monaco Editor Tabs</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #000000;
+            color: #ffffff;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        .tab-bar {
+            background: #000000;
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid #2a2a2a;
+            padding: 0;
+            user-select: none;
+        }
+
+        #tabsContainer {
+            display: flex;
+            align-items: center;
+        }
+
+        .tab {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 12px;
+            background: #000000;
+            color: #666666;
+            border-right: 1px solid #2a2a2a;
+            cursor: pointer;
+            font-size: 13px;
+            position: relative;
+            min-width: 170px;
+        }
+
+        .tab.active {
+            background: #000000;
+            color: #ffffff;
+        }
+
+        .tab-icon {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            width: auto;
+            height: 16px;
+            flex-shrink: 0;
+        }
+
+            .tab-icon img {
+                width: 15px;
+                height: 15px;
+            }
+
+        /* dirty icon 預設隱藏 */
+        .icon-dirty {
+            display: none;
+        }
+
+        .tab-title {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .context-menu {
+            position: fixed;
+            background: #000000;
+            border: 1px solid #2a2a2a;
+            border-radius: 6px;
+            padding: 4px 0;
+            min-width: 200px;
+            z-index: 10000;
+            display: none;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.8);
+        }
+
+        .context-menu.show {
+            display: block;
+        }
+
+        .context-menu-item {
+            padding: 6px 16px;
+            color: #999999;
+            font-size: 13px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .context-menu-item:hover {
+            background: #1a1a1a;
+            color: #ffffff;
+        }
+
+        .context-menu-item.disabled {
+            color: #666666;
+            cursor: not-allowed;
+        }
+
+        .context-menu-item.disabled:hover {
+            background: transparent;
+            color: #666666;
+        }
+
+        .context-menu-separator {
+            height: 1px;
+            background: #2a2a2a;
+            margin: 4px 0;
+        }
+
+        .tab-close {
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            opacity: 0.6;
+        }
+
+        .tab.active .tab-close {
+            opacity: 1;
+        }
+
+        .tab-close svg {
+            width: 20px;
+            height: 20px;
+        }
+
+        .new-tab-btn {
+            padding: 4px 15px;
+            background: transparent;
+            border: none;
+            color: #666666;
+            cursor: pointer;
+            font-size: 18px;
+            transition: all 0.15s ease;
+            border-right: 1px solid #2a2a2a;
+            outline: none !important;
+            height: 100%;
+        }
+
+        .new-tab-btn:focus {
+            outline: none !important;
+        }
+
+        .new-tab-btn:hover {
+            color: #ffffff;
+            background: #1a1a1a;
+        }
+
+        .editor-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .editor-wrapper {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: none;
+        }
+
+        .editor-wrapper.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="tab-bar" id="tabBar">
+            <div id="tabsContainer"></div>
+            <button class="new-tab-btn" onclick="createNewTab()" title="New Tab">+</button>
+        </div>
+        <div class="editor-container" id="editorContainer"></div>
+    </div>
+
+    <div class="context-menu" id="contextMenu">
+        <div class="context-menu-item" data-action="rename">Rename</div>
+        <div class="context-menu-separator"></div>
+        <div class="context-menu-item" data-action="close">Close</div>
+        <div class="context-menu-item" data-action="close-others">Close Others</div>
+        <div class="context-menu-item" data-action="close-all">Close All</div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+    <script>
+        let tabCounter = 0;
+        let tabs = [];
+        let activeTabId = null;
+        let contextMenuTabId = null;
+        let defaultTabContent = "print'Synapse Winning!'";
+
+
+        require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } });
+
+        require(['vs/editor/editor.main'], function () {
+            // Register custom language
+            // ===== Luau Language =====
+            monaco.languages.register({ id: 'luau' });
+
+            monaco.languages.setMonarchTokensProvider('luau', {
+                keywords: [
+                    'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for', 'function',
+                    'if', 'in', 'local', 'nil', 'not', 'or', 'repeat', 'return', 'then', 'true', 'until', 'while'
+                ],
+
+                special: ['print'],
+
+                tokenizer: {
+                    root: [
+                        // print (特殊紅色)
+                        [/\bprint\b/, 'custom.print'],
+
+                        // keywords
+                        [/\b(?:and|break|do|else|elseif|end|false|for|function|if|in|local|nil|not|or|repeat|return|then|true|until|while)\b/, 'keyword'],
+
+                        // identifiers
+                        [/[a-zA-Z_]\w*/, 'identifier'],
+
+                        // numbers
+                        [/\d+(\.\d+)?/, 'number'],
+
+                        // strings
+                        [/"/, 'string', '@string_double'],
+                        [/'/, 'string', '@string_single'],
+
+                        // comments
+                        [/--.*$/, 'comment'],
+                    ],
+
+                    string_double: [
+                        [/[^\\"]+/, 'string'],
+                        [/\\./, 'string.escape'],
+                        [/"/, 'string', '@pop']
+                    ],
+
+                    string_single: [
+                        [/[^\\']+/, 'string'],
+                        [/\\./, 'string.escape'],
+                        [/'/, 'string', '@pop']
+                    ]
+                }
+            });
+            // Define custom all-black theme
+            monaco.editor.defineTheme('pure-black', {
+                base: 'vs-dark',
+                inherit: true,
+                rules: [
+                    { token: 'custom.print', foreground: 'd16969', fontStyle: 'bold' }, // print（粉紅紅）
+                    { token: 'string', foreground: '64B4FF' }, // 字串（橘紅）
+                    { token: 'string.escape', foreground: 'd7ba7d' },
+                    { token: 'keyword', foreground: 'c586c0' },
+                    { token: 'number', foreground: 'b5cea8' },
+                    { token: 'comment', foreground: '6a9955' }
+                ],
+                colors: {
+                    'editor.background': '#000000',
+                    'editor.foreground': '#ffffff',
+                    'editorLineNumber.foreground': '#666666',
+                    'editorLineNumber.activeForeground': '#ffffff',
+                    'editor.lineHighlightBackground': '#0f0f0f',
+                    'editorCursor.foreground': '#ffffff',
+                    'editor.selectionBackground': '#264f78',
+                    'editor.inactiveSelectionBackground': '#2a2a2a',
+                    'editorWhitespace.foreground': '#333333',
+                    'editorIndentGuide.background': '#2a2a2a',
+                    'editorIndentGuide.activeBackground': '#333333',
+                    'scrollbar.shadow': '#000000',
+                    'scrollbarSlider.background': '#2a2a2a',
+                    'scrollbarSlider.hoverBackground': '#3a3a3a',
+                    'scrollbarSlider.activeBackground': '#333333'
+                }
+            });
+
+            if (!loadTabs()) {
+                createNewTab();
+            }
+        });
+
+        function createNewTab(customTitle = null, customContent = null, customId = null) {
+                const tabId = customId || `tab-${++tabCounter}`;
+                const title = customTitle || 'Untitled tab';
+                // Create tab element
+                const tab = document.createElement('div');
+                tab.className = 'tab';
+                tab.dataset.tabId = tabId;
+                tab.innerHTML = `
+                    <div class="tab-icon">
+    <img class="icon-dirty" src="icons/Asterisk.png" />
+    <img class="icon-base" src="icons/omega.png" />
+</div>
+                    <span class="tab-title">Untitled tab</span>
+                    <div class="tab-close" onclick="closeTab(event, '${tabId}')">
+                        <svg viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+                        </svg>
+                    </div>
+                `;
+                tab.onclick = (e) => {
+                    if (e.target.closest('.tab-close')) return;
+                    switchTab(tabId);
+                };
+                tab.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    showContextMenu(e, tabId);
+                };
+
+                // Insert into tabs container
+                document.getElementById('tabsContainer').appendChild(tab);
+
+                // Create editor wrapper
+                const editorWrapper = document.createElement('div');
+                editorWrapper.className = 'editor-wrapper';
+                editorWrapper.dataset.tabId = tabId;
+                document.getElementById('editorContainer').appendChild(editorWrapper);
+
+                // Create Monaco editor instance
+                const editor = monaco.editor.create(editorWrapper, {
+                    value: customContent ?? defaultTabContent,
+                    language: 'luau',
+                    theme: 'pure-black',
+                    automaticLayout: true,
+                    fontSize: 14,
+                    minimap: { enabled: false },
+                    scrollBeyondLastLine: false,
+                    renderWhitespace: 'selection',
+                    fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+                    fontLigatures: true,
+                    padding: { top: 0, bottom: 0 },
+                    lineNumbers: 'on',
+                    glyphMargin: false,
+                    folding: true,
+                    lineDecorationsWidth: 10,
+                    lineNumbersMinChars: 8,
+                    renderLineHighlight: 'all',
+                    scrollbar: {
+                        vertical: 'auto',
+                        horizontal: 'auto',
+                        useShadows: false,
+                        verticalScrollbarSize: 10,
+                        horizontalScrollbarSize: 10
+                    }
+                });
+                // Store tab data
+            tabs.push({
+                id: tabId,
+                element: tab,
+                editorWrapper: editorWrapper,
+                editor: editor,
+                title: title,
+                dirty: false
+            });
+            editor.onDidChangeModelContent(() => {
+                const tab = tabs.find(t => t.id === tabId);
+                if (!tab) return;
+
+                if (!tab.dirty) {
+                    tab.dirty = true;
+                    updateTabTitle(tab);
+                }
+            });
+                // Switch to the new tab
+                switchTab(tabId);
+
+            saveTab(tabId);
+        }
+
+        function renameTab() {
+            const tab = tabs.find(t => t.id === contextMenuTabId);
+            if (!tab) return;
+
+            const newName = prompt('Enter new tab name:', tab.title);
+            if (newName && newName.trim()) {
+                tab.title = newName.trim();
+                tab.element.querySelector('.tab-title').textContent = newName.trim();
+                saveTab(tab.id);
+            }
+
+            hideContextMenu();
+        }
+
+        function updateTabTitle(tab) {
+            const dirtyIcon = tab.element.querySelector('.icon-dirty');
+            if (!dirtyIcon) return;
+
+            dirtyIcon.style.display = tab.dirty ? 'block' : 'none';
+        }
+
+            function switchTab(tabId) {
+                // Update active states
+                tabs.forEach(tab => {
+                    const isActive = tab.id === tabId;
+                    tab.element.classList.toggle('active', isActive);
+                    tab.editorWrapper.classList.toggle('active', isActive);
+
+                    if (isActive) {
+                        // Layout the editor when it becomes visible
+                        tab.editor.layout();
+                        tab.editor.focus();
+                        updateTabTitle(tab);
+                    }
+                });
+
+                activeTabId = tabId;
+            }
+
+        function closeTab(event, tabId) {
+            event.stopPropagation();
+
+            const tabIndex = tabs.findIndex(t => t.id === tabId);
+            if (tabIndex === -1) return;
+
+            const tab = tabs[tabIndex];
+
+            tab.editor.dispose();
+            tab.element.remove();
+            tab.editorWrapper.remove();
+
+            tabs.splice(tabIndex, 1);
+
+            deleteSavedTab(tabId);
+
+            if (tabId === activeTabId && tabs.length > 0) {
+                const newActiveIndex = Math.min(tabIndex, tabs.length - 1);
+                switchTab(tabs[newActiveIndex].id);
+            } else if (tabs.length === 0) {
+                createNewTab();
+            }
+
+            hideContextMenu();
+        }
+
+            // Keyboard shortcuts
+            document.addEventListener('keydown', (e) => {
+                // Ctrl/Cmd + T for new tab
+                if ((e.ctrlKey || e.metaKey) && e.key === 't') {
+                    e.preventDefault();
+                    createNewTab();
+                }
+
+                // Ctrl/Cmd + W to close current tab
+                if ((e.ctrlKey || e.metaKey) && e.key === 'w') {
+                    e.preventDefault();
+                    if (activeTabId) {
+                        closeTab(new Event('click'), activeTabId);
+                    }
+                }
+
+                // Ctrl/Cmd + Tab to cycle tabs
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Tab') {
+                    e.preventDefault();
+                    const currentIndex = tabs.findIndex(t => t.id === activeTabId);
+                    const nextIndex = (currentIndex + 1) % tabs.length;
+                    switchTab(tabs[nextIndex].id);
+                }
+
+                // Ctrl/Cmd + S 儲存
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                    e.preventDefault();
+                    saveTab(activeTabId);
+                }
+            });
+
+            // Context menu functions
+            function showContextMenu(event, tabId) {
+                const menu = document.getElementById('contextMenu');
+                contextMenuTabId = tabId;
+
+                menu.style.left = event.pageX + 'px';
+                menu.style.top = event.pageY + 'px';
+                menu.classList.add('show');
+            }
+
+            function closeOtherTabs() {
+                const tabsToClose = tabs.filter(t => t.id !== contextMenuTabId);
+                tabsToClose.forEach(tab => {
+                    closeTab(new Event('click'), tab.id);
+                });
+                hideContextMenu();
+            }
+
+            function closeAllTabs() {
+                const allTabs = [...tabs];
+                allTabs.forEach(tab => {
+                    closeTab(new Event('click'), tab.id);
+                });
+                hideContextMenu();
+            }
+
+            function hideContextMenu() {
+                document.getElementById('contextMenu').classList.remove('show');
+            }
+
+        function getSavedData() {
+            const raw = localStorage.getItem("monaco_tabs");
+            if (!raw) return { activeTabId: null, tabs: [] };
+
+            try {
+                const data = JSON.parse(raw);
+                return {
+                    activeTabId: data.activeTabId || null,
+                    tabs: Array.isArray(data.tabs) ? data.tabs : []
+                };
+            } catch {
+                return { activeTabId: null, tabs: [] };
+            }
+        }
+
+        function saveTab(tabId = activeTabId) {
+            const tab = tabs.find(t => t.id === tabId);
+            if (!tab) return;
+
+            const data = getSavedData();
+            const savedTab = {
+                id: tab.id,
+                title: tab.title,
+                content: tab.editor.getValue()
+            };
+
+            const index = data.tabs.findIndex(t => t.id === tabId);
+            if (index >= 0) {
+                data.tabs[index] = savedTab;
+            } else {
+                data.tabs.push(savedTab);
+            }
+
+            data.activeTabId = activeTabId;
+            localStorage.setItem("monaco_tabs", JSON.stringify(data));
+
+            tab.dirty = false;
+            updateTabTitle(tab);
+        }
+
+        function deleteSavedTab(tabId) {
+            const data = getSavedData();
+            data.tabs = data.tabs.filter(t => t.id !== tabId);
+
+            if (data.activeTabId === tabId) {
+                data.activeTabId = null;
+            }
+
+            localStorage.setItem("monaco_tabs", JSON.stringify(data));
+        }
+
+            function loadTabs() {
+                const raw = localStorage.getItem("monaco_tabs");
+                if (!raw) return false;
+
+                try {
+                    const data = JSON.parse(raw);
+
+                    if (!data.tabs || data.tabs.length === 0) return false;
+
+                    data.tabs.forEach(t => {
+                        createNewTab(t.title, t.content, t.id);
+                    });
+
+                    if (data.activeTabId) {
+                        switchTab(data.activeTabId);
+                    }
+
+                    return true;
+                } catch {
+                    return false;
+                }
+            }
+
+            // Hide context menu when clicking elsewhere
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('.context-menu')) {
+                    hideContextMenu();
+                }
+            });
+
+            // Handle context menu item clicks
+            document.addEventListener('DOMContentLoaded', () => {
+                const contextMenu = document.getElementById('contextMenu');
+                contextMenu.addEventListener('click', (e) => {
+                    const item = e.target.closest('.context-menu-item');
+                    if (!item) return;
+
+                    e.stopPropagation();
+                    const action = item.dataset.action;
+
+                    switch (action) {
+                        case 'rename':
+                            renameTab();
+                            break;
+                        case 'close':
+                            closeTab(new Event('click'), contextMenuTabId);
+                            break;
+                        case 'close-others':
+                            closeOtherTabs();
+                            break;
+                        case 'close-all':
+                            closeAllTabs();
+                            break;
+                    }
+                });
+            });
+
+            window.setEditorContent = function (content) {
+                const activeTab = tabs.find(t => t.id === activeTabId);
+                if (!activeTab) return;
+
+                activeTab.editor.setValue(content || "");
+            };
+
+            window.getEditorContent = function () {
+                const activeTab = tabs.find(t => t.id === activeTabId);
+                if (!activeTab) return "";
+
+                return activeTab.editor.getValue();
+            };
+
+            window.setDefaultTabContent = function (content) {
+                defaultTabContent = content || "";
+            };
+    </script>
+</body>
+</html>
